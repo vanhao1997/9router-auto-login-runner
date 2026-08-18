@@ -418,6 +418,9 @@ def _safe_auth_page_state(page, checkpoint):
         ],
     }
     flags = [name for name, selectors in checks.items() if _first_visible_locator(page, selectors)]
+    # Cloudflare's interstitial often exposes only this title, especially in headless Chromium.
+    if "cloudflare_challenge" not in flags and title.lower().startswith(("just a moment", "attention required")):
+        flags.append("cloudflare_challenge")
     flags_text = ",".join(flags) if flags else "none"
     print(
         "    [auth-state] checkpoint={} host={} path={} title={!r} flags={}".format(
