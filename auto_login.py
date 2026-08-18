@@ -351,27 +351,75 @@ def debug_page(page, label):
         print(f"    [debug] failed: {e}")
 
 
+def _first_visible_locator(page, selectors):
+    """Return first visible locator across the page and its active frames."""
+    frames = [page]
+    try:
+        frames.extend(page.frames)
+    except Exception:
+        pass
+    for frame in frames:
+        for selector in selectors:
+            try:
+                locator = frame.locator(selector).first
+                if locator.is_visible():
+                    return locator
+            except Exception:
+                pass
+    return None
+
+
+def _password_step_error(page):
+    """Explain common OpenAI branches without logging account data or page text."""
+    if _first_visible_locator(page, [
+        'button:has-text("Continue with Google")',
+        'button:has-text("Continue with Apple")',
+        'button:has-text("Continue with Microsoft")',
+    ]):
+        return (
+            "OpenAI requested a Google, Apple, or Microsoft sign-in instead of an "
+            "email/password form. Use Manual Login for this account."
+        )
+    if _first_visible_locator(page, [
+        'iframe[src*="turnstile"]',
+        'iframe[src*="captcha"]',
+        '[data-testid*="captcha" i]',
+        'text=/verify you are human|security check|captcha/i',
+    ]):
+        return "OpenAI requested a CAPTCHA or security check. Retry with headless mode disabled and complete it manually."
+    if _first_visible_locator(page, [
+        'input[autocomplete="one-time-code"]',
+        'input[name*="otp" i]',
+        'input[name*="code" i]',
+    ]):
+        return "OpenAI requested a verification code before the password step. Use Manual Login for this account."
+    if _first_visible_locator(page, [
+        'a[href*="log-in-or-create-account"]',
+        'a:has-text("Log in to another account")',
+    ]):
+        return "OpenAI showed its account chooser. Retry once; the runner will select Log in to another account."
+    return "OpenAI did not show a password form. Retry with headless mode disabled; use Manual Login if the account uses a social provider or extra verification."
+
+
 def click_first_visible(page, selectors, timeout=3000):
     """Click the first visible selector from a list. Races all selectors."""
     import time as _time
     # Quick check: any already visible?
-    for sel in selectors:
+    locator = _first_visible_locator(page, selectors)
+    if locator:
         try:
-            loc = page.locator(sel).first
-            if loc.is_visible():
-                loc.click()
-                return True
+            locator.click()
+            return True
         except Exception:
             pass
     # Poll until timeout
     deadline = _time.time() + timeout / 1000
     while _time.time() < deadline:
-        for sel in selectors:
+        locator = _first_visible_locator(page, selectors)
+        if locator:
             try:
-                loc = page.locator(sel).first
-                if loc.is_visible():
-                    loc.click()
-                    return True
+                locator.click()
+                return True
             except Exception:
                 pass
         _time.sleep(0.1)
@@ -380,18 +428,12 @@ def click_first_visible(page, selectors, timeout=3000):
 
 def fill_first_visible(page, selectors, value, timeout=12000):
     """Fill the first visible input from a list. Races all selectors at once."""
-    # Strategy 1: Try OR-combined selector for instant match
-    combined = " >> visible=true, ".join(selectors)
+    # Strategy 1: Try an already-visible field, including embedded auth frames.
     try:
-        # Build a single locator that matches ANY of the selectors
-        for sel in selectors:
-            try:
-                loc = page.locator(sel).first
-                if loc.is_visible():
-                    loc.fill(value)
-                    return loc
-            except Exception:
-                pass
+        locator = _first_visible_locator(page, selectors)
+        if locator:
+            locator.fill(value)
+            return locator
     except Exception:
         pass
 
@@ -399,12 +441,11 @@ def fill_first_visible(page, selectors, value, timeout=12000):
     import time as _time
     deadline = _time.time() + timeout / 1000
     while _time.time() < deadline:
-        for sel in selectors:
+        locator = _first_visible_locator(page, selectors)
+        if locator:
             try:
-                loc = page.locator(sel).first
-                if loc.is_visible():
-                    loc.fill(value)
-                    return loc
+                locator.fill(value)
+                return locator
             except Exception:
                 pass
         _time.sleep(0.15)  # Small poll interval
@@ -460,9 +501,13 @@ def login_account(page, email, password, totp_secret, headed=False):
         wait_a_bit(page, 300)
         debug_page(page, "01_open_auth")
 
-        # Do NOT click generic Continue/Login here. OpenAI's first screen usually
-        # contains the email form directly. Since we launch a fresh browser per
-        # account there is no previous session, so skip the chooser entirely.
+        # A Chrome channel can occasionally show an account chooser despite a
+        # fresh context. Never select a listed account; force the credential flow.
+        if click_first_visible(page, [
+            'a[href*="log-in-or-create-account"]',
+            'a:has-text("Log in to another account")',
+        ], timeout=500):
+            wait_a_bit(page, 250)
 
         # --- Step 1: Email ---
         email_input = fill_first_visible(page, [
@@ -488,8 +533,8 @@ def login_account(page, email, password, totp_secret, headed=False):
             'button:has-text("Log in")',
         ], timeout=900):
             email_input.press("Enter")
-        # Do not sleep here. Wait directly for the password selector below so the
-        # password is filled immediately when the field appears.
+        # Wait directly for the password selector once OpenAI has resolved the
+        # account. Some accounts take longer to advance than the initial page.
         debug_page(page, "03_after_email")
 
         # Some accounts are redirected to Apple/iCloud auth or another IdP.
@@ -502,11 +547,12 @@ def login_account(page, email, password, totp_secret, headed=False):
             'input[autocomplete="current-password"]',
             'input[placeholder*="password" i]',
             'input[placeholder*="mật khẩu" i]',
-        ], password, timeout=9000)
+            'input[data-testid*="password" i]',
+        ], password, timeout=20000)
 
         if not pwd_input:
             debug_page(page, "04_password_not_found")
-            return None, "Password input not found", verifier, state
+            return None, _password_step_error(page), verifier, state
 
         time.sleep(0.05)
         if not click_first_visible(page, [
