@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+_tmp_accounts.txt
+auto_login_results.json
+debug_*.png
+backups/
+.env

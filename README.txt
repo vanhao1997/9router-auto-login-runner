@@ -1,0 +1,61 @@
+﻿Infinity AI Store - Import 9router Tool v2.1
+==============================================
+
+Yeu cau truoc khi chay:
+- Windows 10/11 64-bit.
+- May phai co cai san Python 3.11 tro len (64-bit).
+- Luc cai PHáº¢I tick: Add python.exe to PATH.
+- Da cai va dang nhap 9router tren may.
+
+Tinh nang:
+- Auto Login OAuth Codex hang loat, chay song song nhieu tai khoan.
+- Tu nhap so luong ngay tren giao dien (mac dinh 3, khong gioi han cung).
+- Callback OAuth dung localhost:1455 va tu phan luong theo state, tranh lan ket qua giua cac nick.
+- Ho tro email|password|2FA.
+- Tu dong convert dinh dang paste tu file/tab/comma/space.
+- Moi tai khoan chay browser rieng, sach session.
+- Realtime logs, tien do va danh sach nick dang chay tren giao dien.
+- Import refresh token vao 9router va kiem chung SQLite sau khi ghi.
+
+Cach chay (tu setup tu dong):
+1. Giai nen file ZIP vao mot thu muc rieng.
+2. Double-click: khoi_dong_o_day.bat.
+3. Lan dau file bat tu dong:
+   - Kiem tra Python va pip.
+   - Cai/cap nhat pyotp + playwright.
+   - Tai Chromium cho Playwright.
+   - Khoi dong server tool.
+4. Trinh duyet se tu mo tai: http://localhost:9876
+5. Vao tab Auto Login, dan danh sach nick va nhap so luong muon chay.
+
+Neu bao khong tim thay Python:\r`n- Cai Python 3.11 64-bit tro len, sau do dong va mo lai khoi_dong_o_day.bat.
+
+Luu y:
+- Can internet khi cai lan dau va trong luc dang nhap OAuth.
+- Nhieu luong hon se ton RAM/CPU va co the gap captcha/xac minh nhieu hon.
+- Khong nen xoa auto_login.py, server.py hoac index.html trong thu muc da giai nen.
+- Khong can cai thu cong neu khoi_dong_o_day.bat chay thanh cong.
+
+V1 deploy tren Coolify (runner rieng):
+1. Tao mot Coolify application moi tu Dockerfile nay, expose port 9876.
+2. Bat HTTPS va HTTP Basic Auth cho runner. Khong public runner API khong bao ve.
+3. Tao API key trong 9router dashboard, sau do dat cac env sau trong runner:
+   - N9ROUTER_IMPORT_API=https://9router.vibecodingsolution.ovh/api/v1/oauth/codex/bulk-import
+   - N9ROUTER_IMPORT_API_KEY=<API key cua 9router>
+   - N9ROUTER_IMPORT_FORMAT=codex-bulk
+   - N9ROUTER_IMPORT_AUTH_MODE=api-key
+   - TOOL_ALLOWED_ORIGIN=https://login.9router.vibecodingsolution.ovh
+   - AUTO_LOGIN_DEBUG=false
+4. Deploy 9router branch co route API-key-protected alias. Runner giu callback OAuth
+   localhost:1455 ben trong container, khong can public port 1455.
+5. Mo runner qua domain rieng (vi du login.9router.vibecodingsolution.ovh) va nhap
+   tai khoan trong HTTPS page. Token chi gui toi 9router API, khong hien trong response.
+
+Khong thay doi 9router: dung endpoint bulk-import hien co va dat runner env:
+   - N9ROUTER_IMPORT_API=https://9router.vibecodingsolution.ovh/api/oauth/codex/bulk-import
+   - N9ROUTER_IMPORT_FORMAT=codex-bulk
+   - N9ROUTER_IMPORT_AUTH_MODE=dashboard-password
+   - N9ROUTER_DASHBOARD_PASSWORD=<dashboard password, chi dat trong Coolify secret>
+Dashboard password chi dung de lay HTTP-only session trong bo nho runner. API-key mode
+van an toan hon va nen dung sau khi endpoint /api/v1/... duoc deploy.
+
