@@ -386,7 +386,7 @@ def _password_step_error(page):
         '[data-testid*="captcha" i]',
         'text=/verify you are human|security check|captcha/i',
     ]):
-        return "OpenAI requested a CAPTCHA or security check. Retry with headless mode disabled and complete it manually."
+        return "OpenAI requested a CAPTCHA or security check. VPS auto-login cannot complete it; use a workstation browser/manual OAuth flow."
     if _first_visible_locator(page, [
         'input[autocomplete="one-time-code"]',
         'input[name*="otp" i]',
@@ -398,7 +398,7 @@ def _password_step_error(page):
         'a:has-text("Log in to another account")',
     ]):
         return "OpenAI showed its account chooser. Retry once; the runner will select Log in to another account."
-    return "OpenAI did not show a password form. Retry with headless mode disabled; use Manual Login if the account uses a social provider or extra verification."
+    return "OpenAI did not show a password form. VPS auto-login cannot continue; use a workstation browser/manual OAuth flow for this account."
 
 
 def click_first_visible(page, selectors, timeout=3000):
