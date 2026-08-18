@@ -401,6 +401,23 @@ def _password_step_error(page):
     return "OpenAI did not show a password form. VPS auto-login cannot continue; use a workstation browser/manual OAuth flow for this account."
 
 
+def _email_step_error(page):
+    """Return a safe explanation when OpenAI does not render the email form."""
+    if _first_visible_locator(page, [
+        'iframe[src*="turnstile"]',
+        'iframe[src*="captcha"]',
+        '[data-testid*="captcha" i]',
+        'text=/verify you are human|security check|captcha/i',
+    ]):
+        return "OpenAI requested a CAPTCHA or security check before email. VPS auto-login cannot complete it; use a workstation browser/manual OAuth flow."
+    if _first_visible_locator(page, [
+        'a[href*="log-in-or-create-account"]',
+        'a:has-text("Log in to another account")',
+    ]):
+        return "OpenAI showed its account chooser instead of the email form. Retry once; the runner will select Log in to another account."
+    return "OpenAI did not show an email form. Retry once; if it repeats, the account is blocked by an unsupported verification or anti-bot page."
+
+
 def click_first_visible(page, selectors, timeout=3000):
     """Click the first visible selector from a list. Races all selectors."""
     import time as _time
@@ -506,7 +523,7 @@ def login_account(page, email, password, totp_secret, headed=False):
         if click_first_visible(page, [
             'a[href*="log-in-or-create-account"]',
             'a:has-text("Log in to another account")',
-        ], timeout=500):
+        ], timeout=3000):
             wait_a_bit(page, 250)
 
         # --- Step 1: Email ---
@@ -516,13 +533,15 @@ def login_account(page, email, password, totp_secret, headed=False):
             'input[name="username"]',
             'input[id*="email" i]',
             'input[placeholder*="email" i]',
+            'input[autocomplete="email"]',
+            'input[data-login-web-auth-control="true"]',
             'input[autocomplete="username"]',
             'input:not([type="hidden"]):not([type="password"])',
-        ], email, timeout=10000)
+        ], email, timeout=20000)
 
         if not email_input:
             debug_page(page, "02_email_not_found")
-            return None, "Email input not found", verifier, state
+            return None, _email_step_error(page), verifier, state
 
         time.sleep(0.05)
         if not click_first_visible(page, [
