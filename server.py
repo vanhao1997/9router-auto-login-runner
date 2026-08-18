@@ -56,6 +56,18 @@ OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OAUTH_SCOPE = "openid profile email offline_access"
 OAUTH_REDIRECT_URI = "http://localhost:{}/auth/callback".format(OAUTH_CALLBACK_PORT)
 
+# Optional remote target for workstation manual OAuth. When unset, manual OAuth
+# keeps the original local-database behavior; when set, tokens go to 9router
+# over HTTPS and never touch a workstation database.
+IMPORT_API = os.environ.get("N9ROUTER_IMPORT_API", "").strip().rstrip("/")
+IMPORT_API_KEY = os.environ.get("N9ROUTER_IMPORT_API_KEY", "").strip()
+IMPORT_FORMAT = os.environ.get("N9ROUTER_IMPORT_FORMAT", "codex-bulk").strip().lower()
+IMPORT_AUTH_MODE = os.environ.get("N9ROUTER_IMPORT_AUTH_MODE", "api-key").strip().lower()
+DASHBOARD_PASSWORD = os.environ.get("N9ROUTER_DASHBOARD_PASSWORD", "")
+DASHBOARD_LOGIN_URL = os.environ.get("N9ROUTER_DASHBOARD_LOGIN_URL", "").strip()
+_remote_import_lock = threading.RLock()
+_remote_import_cookie = None
+
 # Pending OAuth state
 _oauth_pending = {}  # state -> {code_verifier, created_at}
 
@@ -586,6 +598,103 @@ def tokens_to_connection(tokens):
     }
 
 
+def _dashboard_login_url():
+    if DASHBOARD_LOGIN_URL:
+        return DASHBOARD_LOGIN_URL
+    parsed = urlparse(IMPORT_API)
+    return "{}://{}/api/auth/login".format(parsed.scheme, parsed.netloc)
+
+
+def _remote_import_headers(refresh_session=False):
+    """Build remote import headers without logging secrets or token payloads."""
+    global _remote_import_cookie
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if IMPORT_AUTH_MODE == "api-key":
+        if not IMPORT_API_KEY:
+            return None, "N9ROUTER_IMPORT_API_KEY is required for api-key import"
+        headers["Authorization"] = "Bearer {}".format(IMPORT_API_KEY)
+        return headers, None
+    if IMPORT_AUTH_MODE != "dashboard-password":
+        return None, "N9ROUTER_IMPORT_AUTH_MODE must be api-key or dashboard-password"
+    if not DASHBOARD_PASSWORD:
+        return None, "N9ROUTER_DASHBOARD_PASSWORD is required for dashboard-password import"
+
+    with _remote_import_lock:
+        if refresh_session:
+            _remote_import_cookie = None
+        if not _remote_import_cookie:
+            request = Request(
+                _dashboard_login_url(),
+                data=json.dumps({"password": DASHBOARD_PASSWORD}).encode("utf-8"),
+                headers=headers,
+            )
+            try:
+                response = urlopen(request, timeout=15)
+                cookie_values = response.headers.get_all("Set-Cookie") or []
+                _remote_import_cookie = next(
+                    (value.split(";", 1)[0] for value in cookie_values if value.startswith("auth_token=")),
+                    None,
+                )
+            except HTTPError as error:
+                return None, "Dashboard login failed (HTTP {})".format(error.code)
+            except Exception as error:
+                return None, "Dashboard login failed: {}".format(type(error).__name__)
+        if not _remote_import_cookie:
+            return None, "Dashboard login did not return an auth session"
+        headers["Cookie"] = _remote_import_cookie
+        return headers, None
+
+
+def import_oauth_connection(conn):
+    """Import a manual OAuth connection locally or into configured remote 9router."""
+    if not IMPORT_API:
+        with _storage_lock:
+            inserted, replaced, errors = import_connections([conn])
+            if errors:
+                return None, "; ".join(errors)
+            if sqlite_exists():
+                verified, _, verify_errors = verify_sqlite_emails([conn])
+                if not verified:
+                    return None, "; ".join(verify_errors) or "Local SQLite verification failed"
+        return {"inserted": inserted, "replaced": replaced, "remote": False}, None
+
+    payload = {"accounts": [conn]} if IMPORT_FORMAT == "codex-bulk" else {"connections": [conn]}
+    for attempt in range(2):
+        headers, config_error = _remote_import_headers(refresh_session=attempt > 0)
+        if config_error:
+            return None, config_error
+        request = Request(
+            IMPORT_API,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+        )
+        try:
+            response = urlopen(request, timeout=20)
+            result = json.loads(response.read().decode("utf-8"))
+            if IMPORT_FORMAT == "codex-bulk":
+                if result.get("failed", 0) or result.get("success", 0) != 1:
+                    details = "; ".join(
+                        str(item.get("error", "remote import failed"))
+                        for item in (result.get("results") or [])
+                        if not item.get("ok")
+                    )
+                    return None, details or "Remote Codex bulk import failed"
+            elif result.get("sqliteVerified") is False:
+                return None, "; ".join(result.get("errors") or []) or "Remote SQLite verification failed"
+            return {
+                "inserted": result.get("inserted", result.get("success", 1)),
+                "replaced": result.get("replaced", 0),
+                "remote": True,
+            }, None
+        except HTTPError as error:
+            if error.code in (401, 403) and attempt == 0:
+                continue
+            return None, "Remote import failed (HTTP {})".format(error.code)
+        except Exception as error:
+            return None, "Remote import failed: {}".format(type(error).__name__)
+    return None, "Remote import failed"
+
+
 # OAuth callback result storage
 _oauth_result = {"status": "idle"}  # idle | waiting | success | error
 
@@ -624,8 +733,15 @@ class OAuthCallbackHandler(SimpleHTTPRequestHandler):
             conn = tokens_to_connection(tokens)
             email = conn.get("email", "Unknown")
             
+            import_result, import_error = import_oauth_connection(conn)
+            if import_error:
+                _oauth_result = {"status": "error", "error": import_error}
+                self._send_html("<h2>Import failed</h2><p>{}</p>".format(import_error))
+                return
+
             try:
-                ins, rep, errs = import_connections([conn])
+                ins = import_result.get("inserted", 0)
+                rep = import_result.get("replaced", 0)
                 _oauth_result = {
                     "status": "success",
                     "email": email,
@@ -633,6 +749,7 @@ class OAuthCallbackHandler(SimpleHTTPRequestHandler):
                     "hasRefresh": bool(conn.get("refreshToken")),
                     "inserted": ins,
                     "replaced": rep,
+                    "remote": import_result.get("remote", False),
                 }
                 self._send_html(
                     '<h2 style="color:#22c55e">Login successful!</h2>'

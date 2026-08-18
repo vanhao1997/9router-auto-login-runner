@@ -810,6 +810,19 @@ def emit_event(kind, email, **payload):
     print("|".join(fields), flush=True)
 
 
+def _safe_browser_error(error):
+    """Replace Playwright lifecycle noise with an actionable safe message."""
+    message = str(error or "")
+    lowered = message.lower()
+    if (
+        "target page, context or browser has been closed" in lowered
+        or "browsertype.launch" in lowered
+        or "browser has been closed" in lowered
+    ):
+        return "VPS browser closed during launch/login. Use workstation browser and Manual OAuth."
+    return message
+
+
 def login_one_account(index, total, account, headed, slow):
     email, password, totp_secret = account
     emit_event("START", email, index=index, total=total)
@@ -837,9 +850,12 @@ def login_one_account(index, total, account, headed, slow):
                     browser = pw.chromium.launch(channel="chrome", **launch_kwargs)
                     if account_attempt == 0:
                         print("    Browser: Google Chrome | shared callback={}".format(REDIRECT_URI), flush=True)
-                except Exception as error:
-                    print("    [!] Chrome unavailable, fallback Chromium: {}".format(error), flush=True)
-                    browser = pw.chromium.launch(**launch_kwargs)
+                except Exception:
+                    print("    [!] Chrome unavailable, fallback Chromium", flush=True)
+                    try:
+                        browser = pw.chromium.launch(**launch_kwargs)
+                    except Exception as fallback_error:
+                        raise RuntimeError(_safe_browser_error(fallback_error))
                 context = browser.new_context(
                     viewport={"width": 1280, "height": 800},
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -875,9 +891,9 @@ def login_one_account(index, total, account, headed, slow):
                 emit_event("ERROR", actual_email, error=message)
                 return {"email": actual_email, "status": "error", "error": message, "imported": False}
         except Exception as error:
-            last_error = str(error)
+            last_error = _safe_browser_error(error)
             if account_attempt < 2:
-                print("    [retry] Exception, restarting browser: {}".format(error), flush=True)
+                print("    [retry] Exception, restarting browser: {}".format(last_error), flush=True)
                 continue
             print("    ❌ Exception: {}".format(error), flush=True)
             emit_event("ERROR", email, error=last_error)

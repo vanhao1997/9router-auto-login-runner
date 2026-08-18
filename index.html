@@ -808,10 +808,11 @@
           <div id="oauth-manual-section" style="display:none">
             <div class="info-box">
               <strong>Login thủ công</strong>
-              Bấm nút → trang OpenAI mở ra → bạn tự đăng nhập → tự động redirect về và import vào 9router.
+              Chạy trên workstation có trình duyệt: bấm nút → trang OpenAI mở ra → bạn tự đăng nhập → tự động redirect về và import vào 9router.
               <br><br>
               ✅ Refresh token không hết hạn — 9router tự refresh mãi mãi.<br>
-              ❌ Phải đăng nhập thủ công từng nick.
+              ❌ Phải đăng nhập thủ công từng nick.<br>
+              ⚠️ Không bấm nút này trên runner VPS/Coolify: callback `localhost:1455` nằm trên chính máy chạy server.
             </div>
             <button class="btn btn-primary btn-block" id="btn-oauth-login" style="font-size:1rem;padding:14px">
               🚀 Login ChatGPT (OAuth)

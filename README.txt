@@ -59,3 +59,22 @@ Khong thay doi 9router: dung endpoint bulk-import hien co va dat runner env:
 Dashboard password chi dung de lay HTTP-only session trong bo nho runner. API-key mode
 van an toan hon va nen dung sau khi endpoint /api/v1/... duoc deploy.
 
+Workstation manual OAuth (khuyen nghi khi VPS gap Cloudflare/anti-bot):
+1. Clone repo tren may co Chrome that, khong chay trong container VPS.
+2. Cai dependency: `python -m pip install -r requirements.txt`.
+3. Dat env remote import trong phien terminal hien tai, dung API key uu tien:
+   - `N9ROUTER_IMPORT_API=https://9router.vibecodingsolution.ovh/api/oauth/codex/bulk-import`
+   - `N9ROUTER_IMPORT_FORMAT=codex-bulk`
+   - `N9ROUTER_IMPORT_AUTH_MODE=api-key`
+   - `N9ROUTER_IMPORT_API_KEY=<API key cua 9router>`
+   - `TOOL_BIND_HOST=127.0.0.1`
+   - `TOOL_OPEN_BROWSER=true`
+   - `TOOL_HEADLESS_DEFAULT=false`
+4. Chay `python server.py`, mo `http://localhost:9876`, chon `Manual Login`.
+5. Dang nhap tung account trong Chrome workstation. Callback `localhost:1455` doi token
+   tai workstation, sau do chi gui connection da nhan token toi `N9ROUTER_IMPORT_API`.
+
+Khong dat password, API key, refresh token vao repo, README, screenshot, hoac chat. Manual
+OAuth tren domain runner VPS khong tu dong mo Chrome tren may workstation va khong dung
+duoc callback localhost; hay chay server.py local theo huong dan tren.
+
