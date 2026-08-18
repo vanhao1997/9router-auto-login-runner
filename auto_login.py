@@ -16,6 +16,7 @@ import sys
 import os
 import json
 import time
+import re
 import base64
 import hashlib
 import secrets
@@ -369,6 +370,64 @@ def _first_visible_locator(page, selectors):
     return None
 
 
+def _safe_auth_page_state(page, checkpoint):
+    """Log auth-page signals without page content, query strings, or credentials."""
+    try:
+        parsed = urlparse(page.url)
+        host = parsed.hostname or "unknown"
+        path = parsed.path or "/"
+    except Exception:
+        host, path = "unknown", "/"
+
+    try:
+        # Titles should not contain credentials, but redact email-like values anyway.
+        title = re.sub(r"[^\s@]+@[^\s@]+", "[redacted-email]", page.title() or "")
+        title = re.sub(r"[\r\n\t]+", " ", title).strip()[:120] or "untitled"
+    except Exception:
+        title = "unavailable"
+
+    checks = {
+        "captcha": [
+            'iframe[src*="turnstile"]',
+            'iframe[src*="captcha"]',
+            '[data-testid*="captcha" i]',
+        ],
+        "cloudflare_challenge": [
+            'iframe[src*="challenges.cloudflare.com"]',
+            'form#challenge-form',
+            '#challenge-running',
+            'input[name*="cf-turnstile-response" i]',
+        ],
+        "account_chooser": [
+            'a[href*="log-in-or-create-account"]',
+            'a:has-text("Log in to another account")',
+        ],
+        "verification_code": [
+            'input[autocomplete="one-time-code"]',
+            'input[name*="otp" i]',
+            'input[name*="code" i]',
+        ],
+        "email_field": [
+            'input[autocomplete="email"]',
+            'input[type="email"]',
+            'input[data-login-web-auth-control="true"]',
+        ],
+        "password_field": [
+            'input[type="password"]',
+            'input[autocomplete="current-password"]',
+        ],
+    }
+    flags = [name for name, selectors in checks.items() if _first_visible_locator(page, selectors)]
+    flags_text = ",".join(flags) if flags else "none"
+    print(
+        "    [auth-state] checkpoint={} host={} path={} title={!r} flags={}".format(
+            checkpoint, host, path, title, flags_text
+        ),
+        flush=True,
+    )
+    return set(flags)
+
+
 def _password_step_error(page):
     """Explain common OpenAI branches without logging account data or page text."""
     if _first_visible_locator(page, [
@@ -401,8 +460,11 @@ def _password_step_error(page):
     return "OpenAI did not show a password form. VPS auto-login cannot continue; use a workstation browser/manual OAuth flow for this account."
 
 
-def _email_step_error(page):
+def _email_step_error(page, flags=None):
     """Return a safe explanation when OpenAI does not render the email form."""
+    flags = flags or set()
+    if "cloudflare_challenge" in flags:
+        return "OpenAI showed a Cloudflare challenge before email. VPS auto-login cannot complete it; use a workstation browser/manual OAuth flow."
     if _first_visible_locator(page, [
         'iframe[src*="turnstile"]',
         'iframe[src*="captcha"]',
@@ -415,7 +477,7 @@ def _email_step_error(page):
         'a:has-text("Log in to another account")',
     ]):
         return "OpenAI showed its account chooser instead of the email form. Retry once; the runner will select Log in to another account."
-    return "OpenAI did not show an email form. Retry once; if it repeats, the account is blocked by an unsupported verification or anti-bot page."
+    return "OpenAI did not show an email form. Retry once; if it repeats, see the safe [auth-state] deployment log for the detected page state."
 
 
 def click_first_visible(page, selectors, timeout=3000):
@@ -541,7 +603,8 @@ def login_account(page, email, password, totp_secret, headed=False):
 
         if not email_input:
             debug_page(page, "02_email_not_found")
-            return None, _email_step_error(page), verifier, state
+            flags = _safe_auth_page_state(page, "email_not_found")
+            return None, _email_step_error(page, flags), verifier, state
 
         time.sleep(0.05)
         if not click_first_visible(page, [
@@ -571,6 +634,7 @@ def login_account(page, email, password, totp_secret, headed=False):
 
         if not pwd_input:
             debug_page(page, "04_password_not_found")
+            _safe_auth_page_state(page, "password_not_found")
             return None, _password_step_error(page), verifier, state
 
         time.sleep(0.05)
