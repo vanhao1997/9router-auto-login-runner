@@ -1,2 +1,2 @@
-playwright==1.51.1
+playwright==1.51.0
 pyotp==2.9.0
